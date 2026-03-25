@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GCP Deployment Guide — Ecomm Support</title>
+ <link rel="stylesheet" href="anubhav.css">
+</head>
+
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <div class="nav-logo">GCP</div>
+      <div class="nav-title">Ecomm Support <span>Deployment</span></div>
+    </div>
+    <div class="nav-links">
+      <a href="#stack">Stack</a>
+      <a href="#architecture" class="hide-mobile">Architecture</a>
+      <a href="#steps">Steps</a>
+      <a href="#checklist">Checklist</a>
+      <a href="#public-url" class="hide-mobile">Public URL</a>
+      <a href="#cloudsql" class="hide-mobile">Cloud SQL</a>
+      <div class="nav-divider"></div>
+      <span class="nav-badge">☁️ Cloud Run</span>
+    </div>
+  </nav>
+
+  <div class="container">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="header-badge">☁️ Google Cloud Platform</div>
+      <h1>GCP Deployment Guide</h1>
+      <p class="subtitle">Full-stack deployment plan for Ecomm Support — FastAPI backend + Next.js frontend on Cloud
+        Run.</p>
+    </div>
+
+    <!-- What you have -->
+    <div id="stack" class="section-title">What you have</div>
+    <div class="stack-grid">
+      <div class="stack-card">
+        <div class="stack-label">Backend</div>
+        <div class="stack-name">FastAPI</div>
+        <div class="stack-tech">LangGraph + Gemini 2.5</div>
+        <span class="status-badge ok">✓ Has Dockerfile</span>
+      </div>
+      <div class="stack-card">
+        <div class="stack-label">Frontend</div>
+        <div class="stack-name">Next.js 16</div>
+        <div class="stack-tech">App Router + Tailwind</div>
+        <span class="status-badge done">✓ Dockerfile Added</span>
+      </div>
+      <div class="stack-card">
+        <div class="stack-label">Database</div>
+        <div class="stack-name">SQLite</div>
+        <div class="stack-tech">Local file</div>
+        <span class="status-badge warn">⚠ Cloud Problem</span>
+      </div>
+      <div class="stack-card">
+        <div class="stack-label">Vector Store</div>
+        <div class="stack-name">FAISS</div>
+        <div class="stack-tech">Local indexes</div>
+        <span class="status-badge warn">⚠ Needs Storage</span>
+      </div>
+      <div class="stack-card">
+        <div class="stack-label">AI Model</div>
+        <div class="stack-name">Gemini</div>
+        <div class="stack-tech">Google API Key</div>
+        <span class="status-badge ok">✓ Cloud Ready</span>
+      </div>
+    </div>
+
+    <!-- Architecture -->
+    <div id="architecture" class="section-title">GCP Architecture</div>
+    <div class="arch-box">
+      <div class="arch-diagram">
+        Internet
+        │
+        ▼
+        <span class="highlight">Cloud Load Balancer</span> (HTTPS termination · single IP · SSL cert)
+        ├──► /api/* → <span class="service">Cloud Run (Backend — FastAPI)</span>
+        └──► /* → <span class="service">Cloud Run (Frontend — Next.js)</span>
+        │
+        <span class="storage">Cloud Storage</span> (FAISS indexes + SQLite backup)
+        │
+        <span class="highlight">Secret Manager</span> (GOOGLE_API_KEY)
+      </div>
+    </div>
+
+    <!-- Steps -->
+    <div id="steps" class="section-title">Step-by-step deployment</div>
+    <div class="steps">
+
+      <!-- Step 1 -->
+      <div class="step-card">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <div class="step-header">
+            <span class="step-tag">Setup</span>
+            <div class="step-title">Install gcloud CLI + create project</div>
+          </div>
+          <div class="step-desc">Install the Google Cloud CLI, authenticate, create a new project, and enable all
+            required APIs in one shot.</div>
+          <div class="code-wrap">
+            <div class="code-header">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre><span class="comment"># Install gcloud CLI → https://cloud.google.com/sdk/docs/install</span>
+
+<span class="cmd">gcloud auth login</span>
+<span class="cmd">gcloud projects create</span> <span class="value">ecomm-support-prod</span> <span class="flag">--name=</span><span class="value">"Ecomm Support"</span>
+<span class="cmd">gcloud config set</span> project <span class="value">ecomm-support-prod</span>
+
+<span class="comment"># Enable required APIs</span>
+<span class="cmd">gcloud services enable</span> \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  storage.googleapis.com \
+  cloudbuild.googleapis.com
+
+<span class="comment"># Create Artifact Registry (stores Docker images)</span>
+<span class="cmd">gcloud artifacts repositories create</span> ecomm-support \
+  <span class="flag">--repository-format=</span>docker \
+  <span class="flag">--location=</span>us-central1</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="step-card">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <div class="step-header">
+            <span class="step-tag secret">Secret Manager</span>
+            <div class="step-title">Store API keys safely</div>
+          </div>
+          <div class="step-desc">Never put secrets in env files or Docker images. Store <code>GOOGLE_API_KEY</code> in
+            Secret Manager and grant Cloud Run access.</div>
+          <div class="code-wrap">
+            <div class="code-header">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre><span class="comment"># Store API key (replace with your actual key)</span>
+<span class="cmd">echo -n</span> <span class="value">"YOUR_ACTUAL_GOOGLE_API_KEY"</span> | \
+  <span class="cmd">gcloud secrets create</span> GOOGLE_API_KEY <span class="flag">--data-file=-</span>
+
+<span class="comment"># Grant Cloud Run service account access</span>
+<span class="cmd">gcloud secrets add-iam-policy-binding</span> GOOGLE_API_KEY \
+  <span class="flag">--member=</span><span class="value">"serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com"</span> \
+  <span class="flag">--role=</span><span class="value">"roles/secretmanager.secretAccessor"</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="step-card">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <div class="step-header">
+            <span class="step-tag storage">Cloud Storage</span>
+            <div class="step-title">Upload FAISS indexes + SQLite DB</div>
+          </div>
+          <div class="step-desc">FAISS indexes and the SQLite database are local files that must live in Cloud Storage
+            so Cloud Run containers can access them at startup.</div>
+          <div class="code-wrap">
+            <div class="code-header">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre><span class="comment"># Create storage bucket</span>
+<span class="cmd">gsutil mb</span> <span class="flag">-l</span> us-central1 gs://ecomm-support-data
+
+<span class="comment"># Upload FAISS indexes and SQLite DB</span>
+<span class="cmd">gsutil -m cp -r</span> backend/data/* gs://ecomm-support-data/data/
+<span class="cmd">gsutil cp</span> backend/ecommerce.db gs://ecomm-support-data/</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4 -->
+      <div class="step-card">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <div class="step-header">
+            <span class="step-tag docker">Docker</span>
+            <div class="step-title">Build & push Docker images</div>
+          </div>
+          <div class="step-desc">Build both images locally and push them to Artifact Registry. Run from the project
+            root.</div>
+          <div class="code-wrap">
+            <div class="code-header">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre><span class="comment"># Authenticate Docker with Artifact Registry</span>
+<span class="cmd">gcloud auth configure-docker</span> us-central1-docker.pkg.dev
+
+<span class="comment"># Build + push backend</span>
+<span class="cmd">docker build</span> <span class="flag">-t</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/backend:latest ./backend
+<span class="cmd">docker push</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/backend:latest
+
+<span class="comment"># Build + push frontend</span>
+<span class="cmd">docker build</span> <span class="flag">-t</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/frontend:latest ./frontend-chat
+<span class="cmd">docker push</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/frontend:latest</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5 -->
+      <div class="step-card">
+        <div class="step-num">5</div>
+        <div class="step-content">
+          <div class="step-header">
+            <span class="step-tag deploy">Cloud Run</span>
+            <div class="step-title">Deploy both services</div>
+          </div>
+          <div class="step-desc">Deploy backend first, grab its URL, then inject it as an env var into the frontend
+            deployment.</div>
+          <div class="code-wrap">
+            <div class="code-header">
+              <span class="code-lang">bash</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre><span class="comment"># Deploy backend</span>
+<span class="cmd">gcloud run deploy</span> ecomm-backend \
+  <span class="flag">--image</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/backend:latest \
+  <span class="flag">--platform</span> managed <span class="flag">--region</span> us-central1 \
+  <span class="flag">--allow-unauthenticated</span> \
+  <span class="flag">--memory</span> 2Gi <span class="flag">--cpu</span> 2 <span class="flag">--timeout</span> 120 \
+  <span class="flag">--set-secrets</span> <span class="value">GOOGLE_API_KEY=GOOGLE_API_KEY:latest</span> \
+  <span class="flag">--set-env-vars</span> <span class="value">BOT_DOMAIN=ecommerce</span>
+
+<span class="comment"># Capture backend URL automatically</span>
+<span class="value">BACKEND_URL</span>=$(gcloud run services describe ecomm-backend \
+  <span class="flag">--region</span> us-central1 <span class="flag">--format</span> <span class="value">'value(status.url)'</span>)
+
+<span class="comment"># Deploy frontend with backend URL injected</span>
+<span class="cmd">gcloud run deploy</span> ecomm-frontend \
+  <span class="flag">--image</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/frontend:latest \
+  <span class="flag">--platform</span> managed <span class="flag">--region</span> us-central1 \
+  <span class="flag">--allow-unauthenticated</span> \
+  <span class="flag">--memory</span> 512Mi \
+  <span class="flag">--set-env-vars</span> <span class="value">NEXT_PUBLIC_API_URL=$BACKEND_URL</span></pre>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Checklist -->
+    <div id="checklist" class="section-title">Final checklist</div>
+    <div class="checklist">
+      <div class="checklist-header">
+        <span>#</span><span>Task</span><span>Status</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">01</span>
+        <span class="row-task">Fix backend Dockerfile entry point → <code>src.server:app</code></span>
+        <span class="row-status done">✓ Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">02</span>
+        <span class="row-task">Fix <code>docker-compose.yml</code> — point to <code>frontend-chat</code>, remove
+          GPU</span>
+        <span class="row-status done">✓ Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">03</span>
+        <span class="row-task">Create Next.js multi-stage Dockerfile</span>
+        <span class="row-status done">✓ Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">04</span>
+        <span class="row-task">Add <code>output: 'standalone'</code> to <code>next.config.ts</code></span>
+        <span class="row-status done">✓ Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">05</span>
+        <span class="row-task">Install gcloud CLI on your machine</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">06</span>
+        <span class="row-task">Create GCP project + enable APIs (Step 1)</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">07</span>
+        <span class="row-task">Upload FAISS data + SQLite DB to Cloud Storage (Step 3)</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">08</span>
+        <span class="row-task">Store <code>GOOGLE_API_KEY</code> in Secret Manager (Step 2)</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">09</span>
+        <span class="row-task">Build + push both Docker images to Artifact Registry (Step 4)</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">10</span>
+        <span class="row-task">Deploy backend + frontend to Cloud Run (Step 5)</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">11</span>
+        <span class="row-task">Verify <code>/health</code> endpoint returns 200 on live backend URL</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+      <div class="checklist-row">
+        <span class="row-num">12</span>
+        <span class="row-task">Test login + chat on live frontend URL end-to-end</span>
+        <span class="row-status todo">⬜ Need to be Done</span>
+      </div>
+    </div>
+
+    <!-- Public URL section -->
+    <div id="public-url" class="section-title">Your public URL — how it works</div>
+
+    <div class="public-url-box">
+      <div class="url-preview-row">
+        <div class="url-card frontend">
+          <div class="url-card-label">Frontend (share this)</div>
+          <div class="url-value">https://ecomm-frontend-<span class="url-hash">abc123</span>-uc.a.run.app</div>
+          <div class="url-note">Anyone in the world can open this in any browser</div>
+        </div>
+        <div class="url-card backend">
+          <div class="url-card-label">Backend (internal)</div>
+          <div class="url-value">https://ecomm-backend-<span class="url-hash">abc123</span>-uc.a.run.app</div>
+          <div class="url-note">Called by frontend automatically — users never see this</div>
+        </div>
+      </div>
+
+      <div class="url-flags">
+        <div class="flag-row">
+          <div class="flag-pill on">--allow-unauthenticated</div>
+          <div class="flag-desc">This single flag is what makes it public. Without it → only you (logged into GCP) can
+            access it. With it → anyone with the URL can use it.</div>
+        </div>
+      </div>
+
+      <div class="url-get-cmd">
+        <div class="cmd-label">Get your live URLs after deploying</div>
+        <div class="code-wrap" style="margin-top:10px">
+          <div class="code-header">
+            <span class="code-lang">bash</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+          </div>
+          <pre><span class="comment"># Frontend public URL</span>
+<span class="cmd">gcloud run services describe</span> ecomm-frontend \
+  <span class="flag">--region</span> us-central1 <span class="flag">--format</span> <span class="value">'value(status.url)'</span>
+
+<span class="comment"># Backend public URL</span>
+<span class="cmd">gcloud run services describe</span> ecomm-backend \
+  <span class="flag">--region</span> us-central1 <span class="flag">--format</span> <span class="value">'value(status.url)'</span></pre>
+        </div>
+      </div>
+
+      <div class="important-note">
+        <div class="note-icon">⚠️</div>
+        <div>
+          <strong>Important — deploy in this exact order:</strong><br />
+          <span>Deploy backend first → get its URL → bake it into frontend Docker build → deploy frontend.
+            <code>NEXT_PUBLIC_API_URL</code> is embedded at build time in Next.js, not at runtime.</span>
+        </div>
+      </div>
+
+      <div class="url-get-cmd" style="margin-top:16px">
+        <div class="cmd-label">Correct build order with URL baked in</div>
+        <div class="code-wrap" style="margin-top:10px">
+          <div class="code-header">
+            <span class="code-lang">bash</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+          </div>
+          <pre><span class="comment"># 1. Deploy backend first</span>
+<span class="cmd">gcloud run deploy</span> ecomm-backend ...
+
+<span class="comment"># 2. Capture backend URL</span>
+<span class="value">BACKEND_URL</span>=$(gcloud run services describe ecomm-backend \
+  <span class="flag">--region</span> us-central1 <span class="flag">--format</span> <span class="value">'value(status.url)'</span>)
+
+<span class="comment"># 3. Build frontend with real backend URL baked in</span>
+<span class="cmd">docker build</span> \
+  <span class="flag">--build-arg</span> <span class="value">NEXT_PUBLIC_API_URL=$BACKEND_URL</span> \
+  <span class="flag">-t</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/frontend:latest \
+  ./frontend-chat
+
+<span class="comment"># 4. Push + deploy frontend</span>
+<span class="cmd">docker push</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/frontend:latest
+<span class="cmd">gcloud run deploy</span> ecomm-frontend \
+  <span class="flag">--image</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/frontend:latest \
+  <span class="flag">--platform</span> managed <span class="flag">--region</span> us-central1 \
+  <span class="flag">--allow-unauthenticated</span> \
+  <span class="flag">--memory</span> 512Mi</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Comparison table -->
+    <div class="section-title">Local vs GCP — what changes</div>
+    <div class="compare-table">
+      <div class="ct-header">
+        <span></span><span>Local (now)</span><span>After GCP Deploy</span>
+      </div>
+      <div class="ct-row">
+        <span class="ct-label">Frontend URL</span>
+        <span class="ct-val dim">localhost:3000</span>
+        <span class="ct-val green">https://ecomm-frontend-xxxx.run.app</span>
+      </div>
+      <div class="ct-row">
+        <span class="ct-label">Who can access</span>
+        <span class="ct-val dim">Only you</span>
+        <span class="ct-val green">Anyone in the world</span>
+      </div>
+      <div class="ct-row">
+        <span class="ct-label">HTTPS</span>
+        <span class="ct-val dim">No</span>
+        <span class="ct-val green">Yes — automatic</span>
+      </div>
+      <div class="ct-row">
+        <span class="ct-label">Stays up when laptop off</span>
+        <span class="ct-val dim">No</span>
+        <span class="ct-val green">Yes — always on</span>
+      </div>
+      <div class="ct-row">
+        <span class="ct-label">Backend URL</span>
+        <span class="ct-val dim">localhost:8000</span>
+        <span class="ct-val green">https://ecomm-backend-xxxx.run.app</span>
+      </div>
+      <div class="ct-row">
+        <span class="ct-label">Cost</span>
+        <span class="ct-val dim">Free</span>
+        <span class="ct-val green">~$0–5/month (demo traffic)</span>
+      </div>
+    </div>
+
+    <!-- Cloud SQL Section -->
+    <div id="cloudsql" class="section-title">Cloud SQL — PostgreSQL Migration</div>
+
+    <div class="csql-config-bar">
+      <div class="csql-config-item"><span class="csql-config-label">Region</span><span class="csql-config-val">us-east4 (Northern Virginia)</span></div>
+      <div class="csql-config-divider"></div>
+      <div class="csql-config-item"><span class="csql-config-label">DB Version</span><span class="csql-config-val">PostgreSQL 17.8</span></div>
+      <div class="csql-config-divider"></div>
+      <div class="csql-config-item"><span class="csql-config-label">Machine Type</span><span class="csql-config-val">db-custom-2-8192</span></div>
+      <div class="csql-config-divider"></div>
+      <div class="csql-config-item"><span class="csql-config-label">vCPUs</span><span class="csql-config-val">2 vCPU</span></div>
+      <div class="csql-config-divider"></div>
+      <div class="csql-config-item"><span class="csql-config-label">RAM</span><span class="csql-config-val">8 GB</span></div>
+      <div class="csql-config-divider"></div>
+      <div class="csql-config-item"><span class="csql-config-label">Storage</span><span class="csql-config-val">20 GB SSD</span></div>
+    </div>
+
+    <div class="csql-what-changes">
+      <div class="csql-wc-title">What needs to change in your backend code</div>
+      <div class="csql-files-grid">
+        <div class="csql-file-card">
+          <div class="csql-file-name">src/utils/context_loader.py</div>
+          <div class="csql-file-badge warn">Needs change</div>
+          <div class="csql-file-desc">Uses <code>sqlite3.connect()</code> hardcoded to <code>ecommerce.db</code> path. Replace with <code>psycopg2</code> reading <code>DATABASE_URL</code> from env.</div>
+        </div>
+        <div class="csql-file-card">
+          <div class="csql-file-name">src/sql_agent/db_setup.py</div>
+          <div class="csql-file-badge warn">Needs change</div>
+          <div class="csql-file-desc">Uses <code>sqlite3</code> module with <code>sqlite_master</code> queries. Replace with PostgreSQL-compatible <code>information_schema</code> queries.</div>
+        </div>
+        <div class="csql-file-card">
+          <div class="csql-file-name">src/sql_agent/core/generator.py</div>
+          <div class="csql-file-badge warn">Needs change</div>
+          <div class="csql-file-desc">Uses <code>sqlite3.connect(self.db_path)</code> with a hardcoded default path <code>"ecommerce.db"</code>. Replace with <code>psycopg2</code> reading <code>DATABASE_URL</code> from env.</div>
+        </div>
+        <div class="csql-file-card">
+          <div class="csql-file-name">src/sql_agent/core/validator.py</div>
+          <div class="csql-file-badge warn">Needs change</div>
+          <div class="csql-file-desc">Uses <code>sqlite3.connect(self.db_path)</code> and <code>pd.read_sql_query()</code> against SQLite. Replace connection with <code>psycopg2</code> + <code>DATABASE_URL</code>.</div>
+        </div>
+        <div class="csql-file-card">
+          <div class="csql-file-name">requirements.txt</div>
+          <div class="csql-file-badge minor">Add packages</div>
+          <div class="csql-file-desc">Add <code>psycopg2-binary</code> and <code>cloud-sql-python-connector[pg8000]</code> for Cloud SQL Auth Proxy support.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="steps" style="margin-top:16px">
+
+      <div class="step-card">
+        <div class="step-num" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)">A</div>
+        <div class="step-content">
+          <div class="step-header"><span class="step-tag docker">Cloud SQL</span><div class="step-title">Create Cloud SQL instance + database</div></div>
+          <div class="step-desc">Create the instance in <strong>us-east4</strong> matching your config, create the database, and set the root password.</div>
+          <div class="code-wrap">
+            <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+            <pre><span class="comment"># Create PostgreSQL 17 instance</span>
+<span class="cmd">gcloud sql instances create</span> ecomm-support-db \
+  <span class="flag">--database-version=</span><span class="value">POSTGRES_17</span> \
+  <span class="flag">--region=</span><span class="value">us-east4</span> \
+  <span class="flag">--tier=</span><span class="value">db-custom-2-8192</span> \
+  <span class="flag">--storage-size=</span><span class="value">20GB</span> \
+  <span class="flag">--storage-type=</span><span class="value">SSD</span> \
+  <span class="flag">--no-storage-auto-increase</span>
+
+<span class="comment"># Create database + set password</span>
+<span class="cmd">gcloud sql databases create</span> ecommerce <span class="flag">--instance=</span>ecomm-support-db
+<span class="cmd">gcloud sql users set-password</span> postgres \
+  <span class="flag">--instance=</span>ecomm-support-db \
+  <span class="flag">--password=</span><span class="value">YOUR_STRONG_PASSWORD</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-num" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)">B</div>
+        <div class="step-content">
+          <div class="step-header"><span class="step-tag secret">Secret Manager</span><div class="step-title">Store database URL in Secret Manager</div></div>
+          <div class="step-desc">Never hardcode credentials. Store the full connection string as a secret.</div>
+          <div class="code-wrap">
+            <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+            <pre><span class="comment"># Get instance connection name</span>
+<span class="value">INSTANCE_CONNECTION</span>=$(gcloud sql instances describe ecomm-support-db \
+  <span class="flag">--format=</span><span class="value">'value(connectionName)'</span>)
+<span class="comment"># e.g. ecomm-support-prod:us-east4:ecomm-support-db</span>
+
+<span class="comment"># Store DB URL (uses Cloud SQL socket path — no public IP needed)</span>
+<span class="cmd">echo -n</span> <span class="value">"postgresql+psycopg2://postgres:YOUR_PASSWORD@/ecommerce?host=/cloudsql/$INSTANCE_CONNECTION"</span> | \
+  <span class="cmd">gcloud secrets create</span> DATABASE_URL <span class="flag">--data-file=-</span>
+
+<span class="comment"># Grant Cloud Run access to the secret</span>
+<span class="cmd">gcloud secrets add-iam-policy-binding</span> DATABASE_URL \
+  <span class="flag">--member=</span><span class="value">"serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com"</span> \
+  <span class="flag">--role=</span><span class="value">"roles/secretmanager.secretAccessor"</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-num" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)">C</div>
+        <div class="step-content">
+          <div class="step-header"><span class="step-tag">IAM</span><div class="step-title">Grant Cloud Run access to Cloud SQL</div></div>
+          <div class="step-desc">Cloud Run connects via the built-in Cloud SQL Auth Proxy. Just grant the IAM role.</div>
+          <div class="code-wrap">
+            <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+            <pre><span class="cmd">gcloud projects add-iam-policy-binding</span> ecomm-support-prod \
+  <span class="flag">--member=</span><span class="value">"serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com"</span> \
+  <span class="flag">--role=</span><span class="value">"roles/cloudsql.client"</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-num" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)">D</div>
+        <div class="step-content">
+          <div class="step-header"><span class="step-tag deploy">Cloud Run</span><div class="step-title">Deploy backend with Cloud SQL attached</div></div>
+          <div class="step-desc">Add <code>--add-cloudsql-instances</code> flag — Cloud Run handles the proxy socket automatically. Inject both secrets.</div>
+          <div class="code-wrap">
+            <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+            <pre><span class="value">INSTANCE_CONNECTION</span>=$(gcloud sql instances describe ecomm-support-db \
+  <span class="flag">--format=</span><span class="value">'value(connectionName)'</span>)
+
+<span class="cmd">gcloud run deploy</span> ecomm-backend \
+  <span class="flag">--image</span> us-central1-docker.pkg.dev/ecomm-support-prod/ecomm-support/backend:latest \
+  <span class="flag">--platform</span> managed <span class="flag">--region</span> us-central1 \
+  <span class="flag">--allow-unauthenticated</span> \
+  <span class="flag">--memory</span> 2Gi <span class="flag">--cpu</span> 2 <span class="flag">--timeout</span> 120 \
+  <span class="flag">--add-cloudsql-instances</span> <span class="value">$INSTANCE_CONNECTION</span> \
+  <span class="flag">--set-secrets</span> <span class="value">GOOGLE_API_KEY=GOOGLE_API_KEY:latest,DATABASE_URL=DATABASE_URL:latest</span> \
+  <span class="flag">--set-env-vars</span> <span class="value">BOT_DOMAIN=ecommerce</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-num" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)">E</div>
+        <div class="step-content">
+          <div class="step-header"><span class="step-tag storage">Migration</span><div class="step-title">Migrate SQLite data → PostgreSQL</div></div>
+          <div class="step-desc">One-time migration of your existing <code>ecommerce.db</code> into Cloud SQL using pgloader via Docker.</div>
+          <div class="code-wrap">
+            <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+            <pre><span class="comment"># Enable public IP temporarily for migration (disable after)</span>
+<span class="cmd">gcloud sql instances patch</span> ecomm-support-db <span class="flag">--assign-ip</span>
+
+<span class="comment"># Run pgloader via Docker (works on Windows/Mac/Linux)</span>
+<span class="cmd">docker run</span> <span class="flag">--rm</span> -v ${PWD}/backend:/data dimitri/pgloader:latest \
+  pgloader sqlite:///data/ecommerce.db \
+  <span class="value">"postgresql://postgres:YOUR_PASSWORD@CLOUD_SQL_PUBLIC_IP/ecommerce"</span>
+
+<span class="comment"># Remove public IP after migration</span>
+<span class="cmd">gcloud sql instances patch</span> ecomm-support-db <span class="flag">--no-assign-ip</span></pre>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- SQLite vs PostgreSQL diff -->
+    <div class="csql-diff-box">
+      <div class="csql-diff-title">Code changes — SQLite → PostgreSQL</div>
+      <div class="csql-diff-grid">
+        <div class="csql-diff-header"><span>SQLite (current)</span><span>PostgreSQL (after)</span></div>
+        <div class="csql-diff-row">
+          <span class="csql-diff-old"><code>sqlite3.connect("ecommerce.db")</code></span>
+          <span class="csql-diff-new"><code>psycopg2.connect(os.getenv("DATABASE_URL"))</code></span>
+        </div>
+        <div class="csql-diff-row">
+          <span class="csql-diff-old"><code>SELECT name FROM sqlite_master WHERE type='table'</code></span>
+          <span class="csql-diff-new"><code>SELECT table_name FROM information_schema.tables WHERE table_schema='public'</code></span>
+        </div>
+        <div class="csql-diff-row">
+          <span class="csql-diff-old"><code>INTEGER PRIMARY KEY AUTOINCREMENT</code></span>
+          <span class="csql-diff-new"><code>SERIAL PRIMARY KEY</code></span>
+        </div>
+        <div class="csql-diff-row">
+          <span class="csql-diff-old"><code>conn.row_factory = sqlite3.Row</code></span>
+          <span class="csql-diff-new"><code>cursor = conn.cursor(cursor_factory=RealDictCursor)</code></span>
+        </div>
+        <div class="csql-diff-row">
+          <span class="csql-diff-old"><code>INSERT OR REPLACE INTO table ...</code></span>
+          <span class="csql-diff-new"><code>INSERT INTO table ... ON CONFLICT DO UPDATE SET ...</code></span>
+        </div>
+        <div class="csql-diff-row">
+          <span class="csql-diff-old"><code>INSERT OR IGNORE INTO table ...</code></span>
+          <span class="csql-diff-new"><code>INSERT INTO table ... ON CONFLICT DO NOTHING</code></span>
+        </div>
+        <div class="csql-diff-row">
+          <span class="csql-diff-old"><code>PRAGMA table_info(table_name)</code></span>
+          <span class="csql-diff-new"><code>SELECT column_name, data_type FROM information_schema.columns WHERE table_name=...</code></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key decisions -->
+    <div class="section-title">Key decisions to make</div>
+    <div class="decision-grid">
+      <div class="decision-card">
+        <div class="decision-q"><span class="icon">🌐</span> Do you need a custom domain?</div>
+        <div class="decision-opts">
+          <div class="decision-opt prod"><strong>Yes →</strong> Add Cloud Load Balancer + SSL cert + domain mapping.
+            I'll write those steps when ready.</div>
+          <div class="decision-opt demo"><strong>No →</strong> Cloud Run gives you a free <code>*.run.app</code> HTTPS
+            URL automatically. No extra setup needed.</div>
+        </div>
+      </div>
+      <div class="decision-card">
+        <div class="decision-q"><span class="icon">⚡</span> Demo or production traffic?</div>
+        <div class="decision-opts">
+          <div class="decision-opt prod"><strong>Production →</strong> Migrate SQLite to Cloud SQL (PostgreSQL).
+            Required for concurrent writes and reliability.</div>
+          <div class="decision-opt demo"><strong>Demo / Internal →</strong> SQLite mounted from Cloud Storage is fine.
+            Zero extra cost or infrastructure.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CTA -->
+    <div class="cta">
+      <p>Start with <strong>Step 1</strong> — install gcloud CLI and create your GCP project.<br /></p>
+    </div>
+
+  </div>
+
+ <script src="anubhav.js"></script>
+</body>
+
+</html>
